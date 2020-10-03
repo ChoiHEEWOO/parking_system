@@ -118,7 +118,7 @@ char * IntToString(int num)
 {
 	/** Dummy Function*/
 	char buf[20];
-	sprintf(buf,"%02d ",num); //고유 자릿값
+	sprintf(buf,"%02d",num); //고유 자릿값
 	//memset(buff.itos_buff,1,sizeof(buff.itos_buff));
 	strcpy(buff.itos_buff,buf);
 	

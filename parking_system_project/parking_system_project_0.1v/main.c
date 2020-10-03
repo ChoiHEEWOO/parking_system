@@ -12,7 +12,6 @@
 
 */
 #define FIRMWARE_VERSION "1.90v"
-
 #define F_CPU 16000000UL
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -25,13 +24,15 @@
 #include "timer_lib.h"
 #include "clcd_i2c.h"
 
-//#define USING_MY_HOTSPOT
-#define NON_USING_MY_HOTSPOT
+#define USING_MY_HOTSPOT
+///#define NON_USING_MY_HOTSPOT
 
 //버퍼를 생성해 여석 여부를 배열을 통해 확인하는 방식
 #define USER_STATE_DEBUG 1
 //RFID 시리얼 데이터 UART0를 통해 출력할 때 사용
-#define DUMMY_TEST_SERIAL 1  //if 1: dummy test, 0: no test at terminal
+#define DUMMY_TEST_SERIAL 0  //if 1: dummy test, 0: no test at terminal
+//다른 장치들 연결 안된 상태에서 테스트해야 할 경우 0으로 설정
+#define MOTOR_DEBUG_WITHOUT_ANOTHER_SENSOR 1 //if 1: default, 0: Motor Test.
 
 //본인 핸드폰 핫스팟 환경일 때
 #ifdef USING_MY_HOTSPOT
@@ -86,9 +87,9 @@ typedef uint8_t u8;
 
  struct{
 	 volatile uint32_t tick_1ms;
-	 volatile uint32_t verified_tick_1ms;
-	 volatile uint32_t no_registered_tick_1ms;
 	 volatile uint32_t buzz_1ms;
+	 volatile uint32_t logojector_tick_1ms;
+	 volatile uint32_t lcd_tick_1ms;
 	 volatile uint32_t timeout_tick_1ms;
  }TICK;
  
@@ -109,7 +110,7 @@ uint8_t rfid_user_uid_buffer[MAX_USER_COUNT][5]={0,}; //최대 MAX_USER_COUNT명
 int rfid_user_count_pointer=0;	
 int rfid_user_flag=0;
 uint8_t esp8266_received_data[50];
-
+uint8_t step_motor_rot[4]={0x05, 0x06, 0x0a, 0x09};
 
 
 void systems_init(void);
@@ -153,9 +154,34 @@ void request_reset_to_admin(char* state);
 void logojector_ON();
 void logojector_OFF();
 
-int start_after_verified_timer_flag=1;
-int start_after_no_registered_timer_flag=1;
-int start_after_exit_user_timer_flag=1;
+void flag_switch(int flag);
+
+
+#define STEP_MOTOR_CW 1
+#define STEP_MOTOR_CCW -1
+#define STEP_MOTOR_DIABLE 0
+
+#define GATE_ENT_OPEN 1
+#define GATE_CLOSE 0
+#define GATE_EXT_OPEN -1
+
+void set_step_rot(int dir);
+int set_step_speed(int _spd);
+void motor_drive();
+void set_step_dir_and_angle(int dir,int angle);
+void set_gate_motor_state(int state);
+volatile int set_motor_flag=0;
+volatile int set_angle;
+
+int logojector_timer_flag=0;
+int start_after_verified_timer_flag=0;
+int start_after_no_registered_timer_flag=0;
+int start_after_exit_user_timer_flag=0;
+int lcd_timer_flag=0;
+
+int gate_busy_flag=0;
+int gate_busy_buffer=0;
+
 
 int start_timeout_count_flag=1;
 ISR(TIMER0_COMP_vect) // 1khz 속도로 ISR 진입
@@ -168,19 +194,32 @@ ISR(TIMER0_COMP_vect) // 1khz 속도로 ISR 진입
 // 	if(ticks%10==0){//0.1khz마다 증가
 	TICK.buzz_1ms++;
 	TICK.tick_1ms++;
-	TICK.verified_tick_1ms++;
-	TICK.no_registered_tick_1ms++;
+	TICK.logojector_tick_1ms++;
+	TICK.lcd_tick_1ms++;
+// 	TICK.verified_tick_1ms++;
+// 	TICK.no_registered_tick_1ms++;
 	TICK.timeout_tick_1ms++;
+	
 	buzz_play(); //
+	
+	motor_drive();
 }
 
+
+volatile int dir=0;
+volatile unsigned char spd=9; //9 is default ! high speed & low current
+volatile int steps=0;
+volatile int set_step=0;
 //esp8266 테스트
 ISR(USART0_RX_vect)
 {
 	uint8_t buff=UDR0;
 	uart0.buf=buff;
-	
-	uart1_tx_char(buff);
+// 	if((buff=='a')||(buff=='s')||(buff=='d'))dir=buff;
+// 	else if(('0'<=buff)&&(buff<='9')){
+// 		spd=buff-'0';
+// 	}
+	//uart1_tx_char(buff);
 }
 
 //여기에 들어가있는 코드는 완전 뒤죽박죽임. 수정해야할 상황이 생긴다면, 차라리 새로짜는게 더 낫습니다.
@@ -241,46 +280,121 @@ int main(void)
 	
 	systems_init();
 	
+	//dummy
+	//DDRF|=0x01;
+	
+	//dummycode
+// 	_delay_ms(1000);
+// 	set_step_dir_and_angle(STEP_MOTOR_CW,360);
+// 	_delay_ms(2000);
+// 	set_step_dir_and_angle(STEP_MOTOR_CCW,180);
+// 	_delay_ms(2000);
+//	set_step_dir_and_angle(STEP_MOTOR_CW,90);
+
 	while (1) 
     {//가급적 루프 안에 delay가 길게 걸리면 않도록 주의해야 함.
 		//dummy code
 		//PORTA^=0x01;
+		//setSoundClip(BUZZ_ON);
 		
-		//to use RFID channels
+		//to use 2 RFID channels
 		static char toggle=0; 
 		//every 100ms, return RFID Reader state
 		RC522_data_request_per_100ms(&toggle);
 		RC522_data_state_check_and_actuate(&toggle);
+		
 		//입장 시, 확인이 성공된 유저의 경우
-		if(start_after_verified_timer_flag==AFTER_VERIFIED_EVENT)
+		if(logojector_timer_flag)
 		{
+				if(TICK.logojector_tick_1ms>30000)
+				{
+					//로고젝터 오프
+					logojector_OFF();
+					logojector_timer_flag=STOP_TIMER;
+				}
+		}
+		//명령이 동시에 발생할 때, 백라이트 끄는 함수가 호출되지 않는 상황이 생겼다. 이에 대한 처리코드
+		if(lcd_timer_flag)
+		{
+			if(TICK.lcd_tick_1ms==12000)
+			{
+				i2c_lcd_noBacklight();
+				lcd_timer_flag=STOP_TIMER;
+			}
+		}
+		
+		if(start_after_verified_timer_flag)
+		{//이미 인식되었던 사람들도 마찬가지 과정을 거침
 			
-			if(TICK.verified_tick_1ms==5000)//5초
+			//가끔 여기 문을 안들어감 뭐가 문젠지는 확인 못했음. 
+			if(TICK.tick_1ms==10000)//5초
 			{
 				//문을 닫아주는 동시에 백라이트 꺼줌
-				setSoundClip(BUZZ_FAIL);
-				
+				//setSoundClip(BUZZ_ON);
+				set_gate_motor_state(GATE_CLOSE);
+				//set_step_dir_and_angle(STEP_MOTOR_CCW,720);
+				//TICK.tick_1ms++;
 			}
-			else if(TICK.verified_tick_1ms==8000){//10초
-				//10초가 지나면 화면 클리어시키고, 백라이트 꺼줌
-				i2c_lcd_noBacklight();
-			}
-			else if(TICK.verified_tick_1ms>30000)
-			{
-				//로고젝터 오프 
-				logojector_OFF();
+			else if(TICK.tick_1ms==12000){//10초
 				start_after_verified_timer_flag=STOP_TIMER;
+				
+				//발생할 버그 상황 해결을 위한 코드
+				//만일 입구열림 상태 도중 출구에서 카드가 찍혔다면?
+				if(gate_busy_flag&&(gate_busy_buffer!=GATE_CLOSE)){
+					set_gate_motor_state(gate_busy_buffer);
+					gate_busy_buffer=0;
+					//start_timer(AFTER_EXIT_USER_EVENT);
+					TICK.tick_1ms=0;
+					start_after_exit_user_timer_flag=1;
+					
+				}
+				gate_busy_flag=0;
 			}
+			
 		}
-		//입장 시, 미 등록된 유저의 경우
-		if(start_after_no_registered_timer_flag==AFTER_NON_REGISTERED_EVENT)
-		{
-			// add some codes
-		}
-		if (start_after_exit_user_timer_flag==AFTER_EXIT_USER_EVENT)
+		
+		if (start_after_exit_user_timer_flag)
 		{
 			//add some codes
+			//PORTF^=0x01;
+			if(TICK.tick_1ms==10000)//5초
+			{
+				//setSoundClip(BUZZ_ON); //전까진 소리 났음
+				
+				//테스트 라인임 없애도 됌 근데 정상적으로 동작하는지 확인하기 위함
+				//set_step_dir_and_angle(STEP_MOTOR_CCW,720); //된다
+				set_gate_motor_state(GATE_CLOSE);
+			}
+			else if(TICK.tick_1ms==12000){//10초
+				//10초가 지나면 화면 클리어시키고, 백라이트 꺼줌
+				//i2c_lcd_noBacklight();
+				start_after_exit_user_timer_flag=STOP_TIMER;
+				
+				//발생할 버그 상황 해결을 위한 코드
+				//만일 출구열림 상태 도중 입구에서 카드가 찍혔다면?
+				if(gate_busy_flag&&(gate_busy_buffer!=GATE_CLOSE)){
+					set_gate_motor_state(gate_busy_buffer);
+					gate_busy_buffer=0;
+					TICK.tick_1ms=0;
+					start_after_verified_timer_flag=1;
+				}
+				gate_busy_flag=0;
+			}
 		}
+		
+		//입장 시, 미 등록된 유저의 경우
+		//이 블럭이 있어야되나 모르겠다. 위에 다르게 구현해놓긴했다. 일단 주석처리
+// 		if(start_after_no_registered_timer_flag)
+// 		{
+// 			// add some codes
+// 			if(TICK.tick_1ms==12000){//10초
+// 				//10초가 지나면 화면 클리어시키고, 백라이트 꺼줌
+// 				//i2c_lcd_noBacklight();
+// 				start_after_no_registered_timer_flag=STOP_TIMER;
+// 			}
+// 		}
+
+
 		//dummy code
 		//else if(received_state==RECEIVE_FAIL); 
 		
@@ -303,49 +417,48 @@ void systems_init(void){
 	//사용하는 기능들 초기화 작업
 	
 	logojector_OFF();
-	
-	mfrc522_init(CH0);
-	mfrc522_init(CH1);
 	uart_init(0,BAUD_9600); //debug channel
 	uart_init(1,BAUD_9600);//esp8266() : Rx:PD2, Tx:PD3
-	i2c_lcd_init();
+	#if MOTOR_DEBUG_WITHOUT_ANOTHER_SENSOR
+		mfrc522_init(CH0);
+		mfrc522_init(CH1);
+		i2c_lcd_init();
 	
 	
-	i2c_lcd_string(0,0,"====================");
-	i2c_lcd_string(1,0,"  SYSTEM BOOTING...");
-	i2c_lcd_string(2,0,"     __________     ");
-	i2c_lcd_string(3,0,"====================");
-	setSoundClip(BUZZ_ON);
-	_delay_ms(2500);
+		i2c_lcd_string(0,0,"====================");
+		i2c_lcd_string(1,0,"  SYSTEM BOOTING...");
+		i2c_lcd_string(2,0,"     __________     ");
+		i2c_lcd_string(3,0,"====================");
+		setSoundClip(BUZZ_ON);
+		_delay_ms(2500);
 	
-	//로딩 시작. RFID모듈체크, ESP8266 연결 체크
+		//로딩 시작. RFID모듈체크, ESP8266 연결 체크
 	
-	mfrc522_version_check(CH0);
-	mfrc522_IRQ_enable(CH0);
-	mfrc522_version_check(CH1);
-	mfrc522_IRQ_enable(CH1);
+		mfrc522_version_check(CH0);
+		mfrc522_IRQ_enable(CH0);
+		mfrc522_version_check(CH1);
+		mfrc522_IRQ_enable(CH1);
+		esp8266_init((unsigned char*)SSID,(unsigned char*)PASSWORD,(unsigned char*)IP,(unsigned char*)PORT);
+		rfid_user_uid_buffer_init();
 	
-	
-	esp8266_init((unsigned char*)SSID,(unsigned char*)PASSWORD,(unsigned char*)IP,(unsigned char*)PORT);
-	rfid_user_uid_buffer_init();
-	
-	char version_buf[20] = " Firmware Ver ";
-	strcat(version_buf,(const char*)FIRMWARE_VERSION);
-	i2c_lcd_string(0,0,"====================");
-	i2c_lcd_string(1,0,"  Parking System    ");
-	i2c_lcd_string(2,0,version_buf);
-	i2c_lcd_string(3,0,"====================");
-	setSoundClip(BUZZ_ESP8266_CONNECTED);
-	//main loop start.
-	_delay_ms(2000);
-	i2c_lcd_clear();
-	i2c_lcd_noBacklight();
+		char version_buf[20] = " Firmware Ver ";
+		strcat(version_buf,(const char*)FIRMWARE_VERSION);
+		i2c_lcd_string(0,0,"====================");
+		i2c_lcd_string(1,0,"  Parking System    ");
+		i2c_lcd_string(2,0, version_buf);
+		i2c_lcd_string(3,0,"====================");
+		setSoundClip(BUZZ_ESP8266_CONNECTED);
+		//main loop start.
+		_delay_ms(2000);
+		i2c_lcd_clear();
+		i2c_lcd_noBacklight();
+	#endif
 }
 
 char mfrc_check_and_data_receive_ch0(void){ 
 	//하... 이 복병을 해결하는 방법은 detect_flag를 다른 곳에서 돌아오도록 처리해주는 방법밖에 안떠오른다. 기모띵 
 	
-	//원인 모를 버그를 해결하기 위한 용도로 쓰는 flag : 카드 인식 request 시, return 할 때 oxoxoxoxox이짓거리 하는 버그 발생	
+	//원인 모를 버그를 해결하기 위한 용도로 쓰는 flag : 카드 인식 request 시, return 할 때 oxoxoxoxox 이짓 하는 버그 발생	
 	static char noise_flag=0;
 	static char toggle_flag=0;
 	static char _byte=0;
@@ -388,8 +501,8 @@ char mfrc_check_and_data_receive_ch0(void){
 // 		if(byte==CARD_FOUND)uart0_tx_char('O');
 // 		else if(byte==CARD_NOT_FOUND)uart0_tx_char('N');
 // 		else if(byte==ERROR)uart0_tx_char('X');
-	///////////////////////////////////////////////////
-
+	////////////////////////////////////////////
+	///////
 			//
 			//dummy code
 			//setSoundClip(BUZZ_SUCCESS);
@@ -532,14 +645,8 @@ void RC522_data_state_check_and_actuate(char *tggl)
 			//esp8266_receive_complete_flag=0;
 			if(esp8266_received_data[0]=='O'){
 				//DB 테이블에 존재하는 uid일 경우 해당 구문을 들어옴
-				
-				uint8_t esp8266_received_data_buffer[50];
-				strcpy((char*)esp8266_received_data_buffer,(char*)esp8266_received_data);
-				strncpy((char*)esp8266_received_data_buffer,"HI",2);
-				
-				start_timer(AFTER_VERIFIED_EVENT); //ticktim을 0으로 클리어시킴.
-				logojector_ON();
-				
+
+				strncpy((char*)esp8266_received_data,"  ",2);
 				
 				//현재 입장객 버퍼 비어있는 인덱스 체크
 				rfid_user_flag=0;
@@ -548,7 +655,6 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					
 					//인덱스를 모두 체크해줘서 한번 인식이 유저의 경우
 					// 다시 카드 인식시키지 않도록 구현
-					
 					if(strcmp((char*)rfid_user_uid_buffer[i],"0000")==0){
 						//해당 위치의 버퍼가 비어있는 것이 확인된다면
 						rfid_user_count_pointer=i;
@@ -579,30 +685,47 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					//char dummy_value=1;
 					strcpy(USER_COUNT_STR,IntToString((int)MAX_USER_COUNT-user_count));
 					
-					
-					
-					
 					char empty_space_str[20]="Empty Space=[";
 					strcat((char*)empty_space_str,USER_COUNT_STR);
 					strcat((char*)empty_space_str,"/");
 					strcat((char*)empty_space_str,MAX_USER_COUNT_STR);
 					strcat((char*)empty_space_str,"]");
-					
-					
 					//start_timer(); //ticktim을 0으로 클리어시킴.
 					//LCD ON
 					i2c_lcd_clear();
 					i2c_lcd_string(0,0,"Welcome,");
-					i2c_lcd_string(1,2,(char*)esp8266_received_data_buffer);
-					i2c_lcd_string(2,0,empty_space_str);
+					i2c_lcd_string(1,0,(char*)esp8266_received_data);
+					i2c_lcd_string(2,0,(char*)empty_space_str);
 					setSoundClip(BUZZ_SUCCESS);
+					start_timer(AFTER_VERIFIED_EVENT); //ticktim을 0으로 클리어시킴.
+					//set_step_dir_and_angle(STEP_MOTOR_CW,720);
+					//gate_busy_flag=1;
+					if(gate_busy_flag==0){
+						set_gate_motor_state(GATE_ENT_OPEN); //한번 선언되면 gate_busy_flag가 활성화된다.
+						gate_busy_flag=1;
+					}
+					//명령 동작 중에 선언되면 모터 동작하지 않고 busy buffer에 저장된다	
+					else gate_busy_buffer=GATE_ENT_OPEN;
+					
+					logojector_ON();
 				}
 				else {//한 번 초과로 인식시켰을 때 지나는 구문
 					i2c_lcd_clear();  
 					i2c_lcd_string(0,0,"Welcome,");
-					i2c_lcd_string(1,2,(char*)esp8266_received_data_buffer);
+					i2c_lcd_string(1,2,(char*)esp8266_received_data);
 					i2c_lcd_string(2,0,"Already Recognized");
 					setSoundClip(BUZZ_SUCCESS);
+					start_timer(AFTER_VERIFIED_EVENT); //ticktim을 0으로 클리어시킴.
+					//set_step_dir_and_angle(STEP_MOTOR_CW,720);
+					//gate_busy_flag=1;	
+					if(gate_busy_flag==0){
+						set_gate_motor_state(GATE_ENT_OPEN); //한번 선언되면 gate_busy_flag가 활성화된다.
+						gate_busy_flag=1;
+					}
+					//타이머 동작 중에 들어오는 상황
+					else gate_busy_buffer=GATE_ENT_OPEN; //명령 동작 중에 선언되면 모터 동작하지 않고 busy buffer에 저장된다	
+					
+					logojector_ON();
 					
 				}
 			}//if(esp8266_received_data[0]=='O') end
@@ -612,7 +735,7 @@ void RC522_data_state_check_and_actuate(char *tggl)
 				i2c_lcd_string(0,0,"Sorry,");
 				i2c_lcd_string(1,2,"This card is");
 				i2c_lcd_string(2,2,"not registered.");
-				
+				start_timer(AFTER_NON_REGISTERED_EVENT);
 				setSoundClip(BUZZ_NOT_REGISTERED);
 			}
 			//_delay_ms(20);
@@ -655,9 +778,6 @@ void RC522_data_state_check_and_actuate(char *tggl)
 			//구현안하기로 함
 			// 구현해둬야 함. ==> 사람들 나가는 것 정도는 확인할 필요가 있음.
 			
-			
-			//흠.... 등록되어있는사람일 경우에 무조건 열어주는방식으로 할까		: esp8266으로부터 데이터 받은 뒤에 그냥 열어줌
-			//입장한 사람에 한정해서만 나갈 수 있도록 제한하는 방식으로 할까		:  >> 이게 타당하다 :
 			for(int i=0; i<MAX_USER_COUNT;i++)
 			{
 				if(strcmp((char*)rfid_user_uid_buffer[i],(char*)rfid_uid_ch1)==0){//출구에서 찍은 카드가 이용객 버퍼에 존재한다면
@@ -665,6 +785,13 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					//절대 버퍼에는 중복되는 값이 들어가지 않도록 코드가 작성되어 있기 때문에 여기다가 명령구문을 넣어도 될듯
 					user_count--; //이용자 카운트를 감소시킴.
 					start_timer(AFTER_EXIT_USER_EVENT); //ticktim을 0으로 클리어시킴.
+					if(gate_busy_flag==0){//한번 선언되면 gate_busy_flag가 활성화된다.
+						set_gate_motor_state(GATE_EXT_OPEN);
+						gate_busy_flag=1;
+					} 
+					else gate_busy_buffer = GATE_EXT_OPEN; //명령 동작 중에 선언되면 모터 동작하지 않고 busy buffer에 저장된다	
+					
+					//gate_busy_flag=1;
 					setSoundClip(BUZZ_SUCCESS);
 				}//그곳 버퍼를 비움
 				
@@ -678,7 +805,6 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					for(int j=0;j<4;j++){
 						uart0_tx_string(HexToString(rfid_user_uid_buffer[i][j]));
 						if(j!=3)uart0_tx_char(' ');
-						//_delay_ms(10);
 					}
 					uart0_tx_char(']');
 					uart0_tx_char('\n');
@@ -847,7 +973,7 @@ void esp8266_init(unsigned char* ssid, unsigned char* pw, unsigned char * ip, un
 	esp8266_return_result_flag=0;
 	i2c_lcd_string(2,0,"     OOOOOOOO__     ");
 	//1byte당 해봐야 1ms 정도밖에 소요되지 않는다.
-	_delay_ms(100);// OK sign 말고도 Linked sign까지 들어온다. 이 문자까지 잡아내려면 또 구문을 추가해야되는데, 번거로워서 일단 딜레이로 처리함.
+	_delay_ms(100);// OK sign 말고도 Linked sign까지 들어온다. 이 문자까지 잡아내려면 또 구문을 추가해야되는데, 번거로워서 딜레이로 처리함.
 
 	i2c_lcd_string(2,0,"     OOOOOOOOO_     ");
 	
@@ -939,22 +1065,12 @@ void start_timer(int flag)
 	
 	//모터 관련된 플래그는 따로 구현해야 될듯
 	//flag를 실패 성공 다 나누지 말고, 출구 입구에 대한 플래그만 나눌까?
-	if(flag==AFTER_VERIFIED_EVENT)
-	{
-		TICK.verified_tick_1ms=0;
-		start_after_verified_timer_flag=AFTER_VERIFIED_EVENT;
-	}
-	else if(flag==AFTER_NON_REGISTERED_EVENT)
-	{
-		TICK.no_registered_tick_1ms=0;
-		start_after_no_registered_timer_flag=AFTER_NON_REGISTERED_EVENT;
-	}
-	//난감하네,, 출/입 둘다 고려하려니 문은 한개라서 좀 그렇네 
-	else if(flag==AFTER_EXIT_USER_EVENT)
-	{
+	TICK.tick_1ms=0;
+	if(flag!=AFTER_EXIT_USER_EVENT)TICK.lcd_tick_1ms=0; // LCD가 출력되는 모든 상황에서 lcd tick 초기화가 된다.
+	if(flag==AFTER_VERIFIED_EVENT)TICK.logojector_tick_1ms=0;
+	//셋된 플래그들에 맞게 타이머 감지를 시작함.
+	flag_switch(flag);
 		
-		
-	}
 }
 void start_timeout_count(void){
 	TICK.timeout_tick_1ms=0;
@@ -985,5 +1101,169 @@ void logojector_ON(void){
 	PORTC|=(1<<4);
 }
 void logojector_OFF(void){
-	PORTC&=~(1<<4);
+	unsigned char buff = ~(1<<4); //자료형이 확실하지 않기 때문에, 확실하게 선언해준 buff를 이용
+	PORTC&=buff;
+}
+
+
+void flag_switch(int flag)
+{
+	
+	/*
+	#define AFTER_VERIFIED_EVENT 1
+	#define AFTER_EXIT_USER_EVENT 2
+	#define AFTER_NON_REGISTERED_EVENT -1
+	#define STOP_TIMER 0
+	*/
+	
+	/*
+	int start_after_verified_timer_flag=1;
+	int start_after_no_registered_timer_flag=1;
+	int start_after_exit_user_timer_flag=1;
+	*/
+	switch(flag)
+	{
+		case  AFTER_VERIFIED_EVENT: 
+			start_after_exit_user_timer_flag=0;
+			start_after_no_registered_timer_flag=0;
+			start_after_verified_timer_flag=1;
+			logojector_timer_flag=1;
+			lcd_timer_flag=1;
+		break;
+		case AFTER_NON_REGISTERED_EVENT:
+			start_after_exit_user_timer_flag=0;
+			start_after_no_registered_timer_flag=1;
+			start_after_verified_timer_flag=0;
+			lcd_timer_flag=1;
+		break;
+		
+		case AFTER_EXIT_USER_EVENT:
+			start_after_exit_user_timer_flag=1;
+			start_after_no_registered_timer_flag=0;
+			start_after_verified_timer_flag=0;
+		break;
+		
+	}
+}
+
+
+void set_step_rot(int dir){
+	static uint32_t i =0;
+	if(dir==STEP_MOTOR_CW)i++;
+	else if(dir==STEP_MOTOR_CCW)i--;
+	
+	if(dir)PORTA=(step_motor_rot[i%4]);
+	else PORTA=STEP_MOTOR_DIABLE;
+}
+
+
+//0~9단계 까지 가능 
+int set_step_speed(int _spd){
+	return (11-_spd);
+}
+//0~9
+//속도는 2ms 갱신이 가장 이상적이며 160mA를 소모함
+// 1ms갱신의 경우 제대로 동작하지 않음
+// 갱신속도를 느리게 할 수록 속도가 느려지며, 전류소모도 이상하게 더 커짐
+//한바퀴는 200스텝?
+void motor_drive(){
+	if(set_motor_flag)
+	{
+		if(TICK.tick_1ms%set_step_speed(spd)==0) //103~5 (
+		{
+			//setSoundClip(BUZZ_ESP8266_CONNECTED);
+			
+			if(steps<set_step){
+				if(dir==STEP_MOTOR_CW)set_step_rot(STEP_MOTOR_CW);
+				else if(dir==STEP_MOTOR_CCW) set_step_rot(STEP_MOTOR_CCW);
+				else set_step_rot(0);
+				steps++;
+			}
+			else {
+				set_motor_flag=0;
+				steps=0;
+				set_step_rot(0);
+// 				dir=0;
+// 				set_step=0;
+			}
+		} 
+	}
+}
+
+void set_step_dir_and_angle(int direction,int angle){
+	//
+	dir=direction;
+	//angle   1.8도 == 1 <==> 360도 == 200
+	set_step=(int)(angle*0.556);
+	set_motor_flag=1;
+}
+
+void set_gate_motor_state(int state){
+	//동일 명령이 계속 들어오면 그떄는 무시하도록 
+	//다른 명령이 들어올 때만 인정
+	
+	//
+	static int current_state_flag; //직전 상태 
+	
+	
+	//동시에 게이트 동작 명령 내리는 상황을 방지하기 위한 코드
+// 	if(state!=GATE_CLOSE)
+// 	{
+//  		if(gate_busy_flag){ //이미 동작되어 있는 상태일 때 
+//  			gate_busy_buff=state; //1또는 -1이 들어가며, 0이면 아무것도 아닌 상태
+//  			return;
+//  		}//그게 아니라면 첫 동작이므로 buff에 현재 상태를 저장하지 않는다.
+// 		gate_busy_flag=1;
+// 		
+// 	}
+	if(state==GATE_ENT_OPEN)
+	{
+		if(current_state_flag==GATE_ENT_OPEN) return; //중복으로 입력했다면 무시
+		else//이전과 다른 명령이 들어왔다면
+		{
+			switch(current_state_flag){
+				case GATE_CLOSE://닫혀있다가 > 입구 오픈 명령
+					set_step_dir_and_angle(STEP_MOTOR_CW,360);
+				break;
+				case GATE_EXT_OPEN: //출구오픈상태 > 입구 오픈 명령
+					set_step_dir_and_angle(STEP_MOTOR_CW,720);
+				break;
+			}	
+		
+		}
+		current_state_flag=GATE_ENT_OPEN;
+	}
+	
+	else if(state==GATE_CLOSE)
+	{
+		if(current_state_flag==GATE_CLOSE) return;
+		else
+		{
+			switch(current_state_flag){
+				case GATE_ENT_OPEN://입구오픈상태에서 닫힘명령
+					set_step_dir_and_angle(STEP_MOTOR_CCW,360);
+				break;
+				case GATE_EXT_OPEN://출구오픈상태에서 닫힘명령
+					set_step_dir_and_angle(STEP_MOTOR_CW,360);
+				break;
+			}
+		}
+		current_state_flag=GATE_CLOSE;
+	}
+	else if(state==GATE_EXT_OPEN)
+	{
+		if(current_state_flag==GATE_EXT_OPEN) return;
+		else
+		{
+			switch(current_state_flag){
+				case GATE_ENT_OPEN: //입구오픈상태에서 출구오픈명령
+				set_step_dir_and_angle(STEP_MOTOR_CCW,720);
+				break;
+				case GATE_CLOSE: //닫힌 상태에서  출구오픈명령
+				set_step_dir_and_angle(STEP_MOTOR_CCW,360);
+				break;
+			}
+		}
+		current_state_flag=GATE_EXT_OPEN;
+	}
 }
