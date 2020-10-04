@@ -18,7 +18,34 @@ void timer0_init()
 	
 }
 
+void timer1_init(){
+	//TIM1
+   //TIM1
+   //8분주
+   //COM : 10 : default HIGH, compare LOW
+   //WGM : 1110 : FAST PWM, TOP:ICR1
+	
+	//DDRE |= (1<<DDRE3);
+	
 
+	TCCR1A = ((0<<COM1A1)|(0<<COM1A0)|(0<<COM1B1)|(0<<COM1B0)|(1<<WGM11)|(0<<WGM10));
+	TCCR1B = ((0<<CS12)|(1<<CS11)|(0<<CS10)|(1<<WGM13)|(1<<WGM12) );	
+	TCNT1H = 0;
+	TCNT1L = 0;
+	//ICR=200이면, 2M/200 = 10KHz마다 오버플로 발생 == 0.1ms
+	//ICR=400이면, 2M/400 = 5KHz마다 오버플로 발생 == 0.2ms
+	//ICR 800 >> 2M/800 = 2.5kHz마다 오버플로발생 == 0.4ms
+	setICR1(200-1);
+	TIMSK|=(1<<TOIE1);
+}
+
+void setICR1(int num)
+{
+	//39999 == 0x9c3f
+	//high write first
+	ICR1H = (unsigned char)(num>>8);
+	ICR1L = (unsigned char)(num&0xff);
+}
 void timer3_init(){
 	//TIM3
 	// prescailing : 8

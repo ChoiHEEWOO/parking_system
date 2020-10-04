@@ -9,6 +9,11 @@
 #include <avr/io.h>
 
 extern void timer0_init();
+
+extern void timer1_init();
+extern void setICR1(int num);
+
+
 //about timer3 initialization
 extern void timer3_init();
 //about Timer3 set data

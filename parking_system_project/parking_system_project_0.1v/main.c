@@ -80,7 +80,7 @@
 //===========================RFID 입/출구==========================//
 #define ENTRANCE_GATE 0
 #define EXIT_GATE 1
-#define MAX_USER_COUNT 5 //주차장 칸수
+#define MAX_USER_COUNT 20 //주차장 칸수
 //===========================RFID 입/출구==========================//
 typedef uint32_t u32;
 typedef uint8_t u8;
@@ -90,6 +90,8 @@ typedef uint8_t u8;
 	 volatile uint32_t buzz_1ms;
 	 volatile uint32_t logojector_tick_1ms;
 	 volatile uint32_t lcd_tick_1ms;
+	 volatile uint32_t exit_gate_tick_1ms;
+	 volatile uint32_t entrance_gate_tick_1ms;
 	 volatile uint32_t timeout_tick_1ms;
  }TICK;
  
@@ -165,6 +167,8 @@ void flag_switch(int flag);
 #define GATE_CLOSE 0
 #define GATE_EXT_OPEN -1
 
+
+//스텝모터 관련 함수 및 변수
 void set_step_rot(int dir);
 int set_step_speed(int _spd);
 void motor_drive();
@@ -173,6 +177,11 @@ void set_gate_motor_state(int state);
 volatile int set_motor_flag=0;
 volatile int set_angle;
 
+//서보모터 관련 함수 및 변수
+volatile int servo_count=0;
+
+
+
 int logojector_timer_flag=0;
 int start_after_verified_timer_flag=0;
 int start_after_no_registered_timer_flag=0;
@@ -180,11 +189,12 @@ int start_after_exit_user_timer_flag=0;
 int lcd_timer_flag=0;
 
 int gate_busy_flag=0;
-int gate_busy_buffer=0;
+int gate_busy_buffer=0; //A사용자가 카드를 찍은 뒤 동작 중인 상황에서, B사용자가 추가로 카드를 찍었을 때 
+//해당 동작에 대한 정보를 기억해뒀다가 A동작이 모두 끝난 뒤 B동작 수행하기 위해 만들어진 버퍼
 
 
 int start_timeout_count_flag=1;
-ISR(TIMER0_COMP_vect) // 1khz 속도로 ISR 진입
+ISR(TIMER0_COMP_vect) // 1khz 속도로 ISR 진입 1ms <-> 20ms
 {
 	//dummy code to check 
 	//PORTA ^=0x02;
@@ -196,6 +206,8 @@ ISR(TIMER0_COMP_vect) // 1khz 속도로 ISR 진입
 	TICK.tick_1ms++;
 	TICK.logojector_tick_1ms++;
 	TICK.lcd_tick_1ms++;
+	TICK.exit_gate_tick_1ms++;
+	TICK.entrance_gate_tick_1ms++;
 // 	TICK.verified_tick_1ms++;
 // 	TICK.no_registered_tick_1ms++;
 	TICK.timeout_tick_1ms++;
@@ -205,6 +217,18 @@ ISR(TIMER0_COMP_vect) // 1khz 속도로 ISR 진입
 	motor_drive();
 }
 
+ISR(TIMER1_OVF_vect){//5kHz마다 진입함
+	//PORTA^=0x01;
+	if(servo_count==200){ 
+		servo_count=0; 
+		PORTA|=((1<<PORTA0)|(1<<PORTA3));
+	}
+	
+	if(servo_count==10) PORTA&=~(1<<PORTA0);
+	if(servo_count==20) PORTA&=~(1<<PORTA3);
+	
+	servo_count++;
+}
 
 volatile int dir=0;
 volatile unsigned char spd=9; //9 is default ! high speed & low current
@@ -290,7 +314,8 @@ int main(void)
 // 	set_step_dir_and_angle(STEP_MOTOR_CCW,180);
 // 	_delay_ms(2000);
 //	set_step_dir_and_angle(STEP_MOTOR_CW,90);
-
+	//setSoundClip(BUZZ_ON);
+	
 	while (1) 
     {//가급적 루프 안에 delay가 길게 걸리면 않도록 주의해야 함.
 		//dummy code
@@ -314,6 +339,7 @@ int main(void)
 				}
 		}
 		//명령이 동시에 발생할 때, 백라이트 끄는 함수가 호출되지 않는 상황이 생겼다. 이에 대한 처리코드
+		//그냥 구문을 아예 따로 lcd관련해서 timer를 분리하였다.
 		if(lcd_timer_flag)
 		{
 			if(TICK.lcd_tick_1ms==12000)
@@ -322,37 +348,40 @@ int main(void)
 				lcd_timer_flag=STOP_TIMER;
 			}
 		}
-		
+
+		//입구에서 등록된 유저가 카드를 찍었을 때 해당 구문을 돈다.
 		if(start_after_verified_timer_flag)
 		{//이미 인식되었던 사람들도 마찬가지 과정을 거침
 			
-			//가끔 여기 문을 안들어감 뭐가 문젠지는 확인 못했음. 
-			if(TICK.tick_1ms==10000)//5초
+			//가끔 여기 문을 안들어감 뭐가 문젠지는 확인이 안됨. 
+			if(TICK.tick_1ms==10000)//10초
 			{
-				//문을 닫아주는 동시에 백라이트 꺼줌
 				//setSoundClip(BUZZ_ON);
-				set_gate_motor_state(GATE_CLOSE);
+				//문을 닫아주는 방향으로 모터를 돌림
+				//set_gate_motor_state(GATE_CLOSE);
 				//set_step_dir_and_angle(STEP_MOTOR_CCW,720);
-				//TICK.tick_1ms++;
 			}
-			else if(TICK.tick_1ms==12000){//10초
+			else if(TICK.tick_1ms==12000){//12초
+			
 				start_after_verified_timer_flag=STOP_TIMER;
 				
 				//발생할 버그 상황 해결을 위한 코드
-				//만일 입구열림 상태 도중 출구에서 카드가 찍혔다면?
-				if(gate_busy_flag&&(gate_busy_buffer!=GATE_CLOSE)){
-					set_gate_motor_state(gate_busy_buffer);
-					gate_busy_buffer=0;
+				//만일 입구열림 상태 도중 출구에서 카드가 찍힌 상태라면 아래 블럭에 진입한다.
+				//if(gate_busy_flag&&(gate_busy_buffer!=GATE_CLOSE))
+				{
+					//set_gate_motor_state(gate_busy_buffer);
+					//gate_busy_buffer=GATE_CLOSE; 
 					//start_timer(AFTER_EXIT_USER_EVENT);
-					TICK.tick_1ms=0;
-					start_after_exit_user_timer_flag=1;
+
+					//출구 동작을 이후에 수행해줘야 함
+					//TICK.tick_1ms=0;
+					//start_after_exit_user_timer_flag=1;
 					
 				}
-				gate_busy_flag=0;
+				//gate_busy_flag=0;
 			}
 			
 		}
-		
 		if (start_after_exit_user_timer_flag)
 		{
 			//add some codes
@@ -363,7 +392,8 @@ int main(void)
 				
 				//테스트 라인임 없애도 됌 근데 정상적으로 동작하는지 확인하기 위함
 				//set_step_dir_and_angle(STEP_MOTOR_CCW,720); //된다
-				set_gate_motor_state(GATE_CLOSE);
+				
+				//set_gate_motor_state(GATE_CLOSE);
 			}
 			else if(TICK.tick_1ms==12000){//10초
 				//10초가 지나면 화면 클리어시키고, 백라이트 꺼줌
@@ -372,13 +402,16 @@ int main(void)
 				
 				//발생할 버그 상황 해결을 위한 코드
 				//만일 출구열림 상태 도중 입구에서 카드가 찍혔다면?
-				if(gate_busy_flag&&(gate_busy_buffer!=GATE_CLOSE)){
-					set_gate_motor_state(gate_busy_buffer);
-					gate_busy_buffer=0;
-					TICK.tick_1ms=0;
-					start_after_verified_timer_flag=1;
+				//if(gate_busy_flag&&(gate_busy_buffer!=GATE_CLOSE))
+				{
+				//	set_gate_motor_state(gate_busy_buffer);
+				//	gate_busy_buffer=GATE_CLOSE;
+
+					//입구 동작을 이후에 수행해줘야 함
+				//	TICK.tick_1ms=0;
+				//	start_after_verified_timer_flag=1;
 				}
-				gate_busy_flag=0;
+				//gate_busy_flag=0;
 			}
 		}
 		
@@ -405,12 +438,15 @@ void systems_init(void){
 	sei();
 	//DDRA|=0x03; //test Port
 	//0~3번비트	: 스테핑모터 제어
-	DDRA=0x0f;
+	//DDRA=0x0f;
+	//PA0, PA3 : 각각 서보모터 제어핀
+	DDRA = (1<<DDRA0)|(1<<DDRA3);
 	//4번비트	: 릴레이스위치
-	DDRC |= (1<<4);
+	DDRC |= (1<<DDRC4);
 	cli(); //전역 인터럽트 해제
 	
 	timer0_init();
+	timer1_init();
 	timer3_init();
 	sei(); //전역 인터럽트 허용
 	TICK.tick_1ms=0;
@@ -698,14 +734,17 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					i2c_lcd_string(2,0,(char*)empty_space_str);
 					setSoundClip(BUZZ_SUCCESS);
 					start_timer(AFTER_VERIFIED_EVENT); //ticktim을 0으로 클리어시킴.
+					
 					//set_step_dir_and_angle(STEP_MOTOR_CW,720);
 					//gate_busy_flag=1;
-					if(gate_busy_flag==0){
-						set_gate_motor_state(GATE_ENT_OPEN); //한번 선언되면 gate_busy_flag가 활성화된다.
-						gate_busy_flag=1;
+					
+					//if(gate_busy_flag==0)
+					{
+						//set_gate_motor_state(GATE_ENT_OPEN); //한번 선언되면 gate_busy_flag가 활성화된다.
+					//	gate_busy_flag=1;
 					}
 					//명령 동작 중에 선언되면 모터 동작하지 않고 busy buffer에 저장된다	
-					else gate_busy_buffer=GATE_ENT_OPEN;
+					//else gate_busy_buffer=GATE_ENT_OPEN;
 					
 					logojector_ON();
 				}
@@ -718,12 +757,13 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					start_timer(AFTER_VERIFIED_EVENT); //ticktim을 0으로 클리어시킴.
 					//set_step_dir_and_angle(STEP_MOTOR_CW,720);
 					//gate_busy_flag=1;	
-					if(gate_busy_flag==0){
-						set_gate_motor_state(GATE_ENT_OPEN); //한번 선언되면 gate_busy_flag가 활성화된다.
-						gate_busy_flag=1;
+					//if(gate_busy_flag==0)
+					{
+						//set_gate_motor_state(GATE_ENT_OPEN); //한번 선언되면 gate_busy_flag가 활성화된다.
+					//	gate_busy_flag=1;
 					}
 					//타이머 동작 중에 들어오는 상황
-					else gate_busy_buffer=GATE_ENT_OPEN; //명령 동작 중에 선언되면 모터 동작하지 않고 busy buffer에 저장된다	
+					//else gate_busy_buffer=GATE_ENT_OPEN; //명령 동작 중에 선언되면 모터 동작하지 않고 busy buffer에 저장된다	
 					
 					logojector_ON();
 					
@@ -762,7 +802,6 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					uart0_tx_char('\n');
 				}
 			#endif 
-			//_delay_ms(100);
 			
 			//strcpy((char*)esp8266_received_data,"SUCCESS,CHOI HEE WOO"); //결과 데이터 저장.	
 			
@@ -785,11 +824,12 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					//절대 버퍼에는 중복되는 값이 들어가지 않도록 코드가 작성되어 있기 때문에 여기다가 명령구문을 넣어도 될듯
 					user_count--; //이용자 카운트를 감소시킴.
 					start_timer(AFTER_EXIT_USER_EVENT); //ticktim을 0으로 클리어시킴.
-					if(gate_busy_flag==0){//한번 선언되면 gate_busy_flag가 활성화된다.
-						set_gate_motor_state(GATE_EXT_OPEN);
-						gate_busy_flag=1;
+					//if(gate_busy_flag==0)
+					{//한번 선언되면 gate_busy_flag가 활성화된다.
+						//set_gate_motor_state(GATE_EXT_OPEN);
+					//	gate_busy_flag=1;
 					} 
-					else gate_busy_buffer = GATE_EXT_OPEN; //명령 동작 중에 선언되면 모터 동작하지 않고 busy buffer에 저장된다	
+					//else gate_busy_buffer = GATE_EXT_OPEN; //명령 동작 중에 선언되면 모터 동작하지 않고 busy buffer에 저장된다	
 					
 					//gate_busy_flag=1;
 					setSoundClip(BUZZ_SUCCESS);
@@ -822,7 +862,6 @@ void RC522_data_state_check_and_actuate(char *tggl)
 	else if(received_state==RECEIVE_FAIL){
 		setSoundClip(BUZZ_FAIL);
 		i2c_lcd_clear();
-		
 		//i2c_lcd_string(0,0,"Welcome,")
 		//i2c_lcd_string(1,2,esp8266_received_data);
 		i2c_lcd_string(2,0,"Plz, Re-tagging. ");
