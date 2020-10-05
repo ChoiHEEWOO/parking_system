@@ -112,7 +112,6 @@ uint8_t rfid_user_uid_buffer[MAX_USER_COUNT][5]={0,}; //최대 MAX_USER_COUNT명
 int rfid_user_count_pointer=0;	
 int rfid_user_flag=0;
 uint8_t esp8266_received_data[50];
-uint8_t step_motor_rot[4]={0x05, 0x06, 0x0a, 0x09};
 
 
 void systems_init(void);
@@ -169,6 +168,7 @@ void flag_switch(int flag);
 
 
 //스텝모터 관련 함수 및 변수
+uint8_t step_motor_rot[4]={0x05, 0x06, 0x0a, 0x09};
 void set_step_rot(int dir);
 int set_step_speed(int _spd);
 void motor_drive();
@@ -176,11 +176,52 @@ void set_step_dir_and_angle(int dir,int angle);
 void set_gate_motor_state(int state);
 volatile int set_motor_flag=0;
 volatile int set_angle;
+volatile int dir=0;
+volatile unsigned char spd=9; //9 is default ! high speed & low current
+volatile int steps=0;
+volatile int set_step=0;
+//////////////////////////////
+
+
+
+
 
 //서보모터 관련 함수 및 변수
+
+#define SERVO_ANGLE_0 0
+#define SERVO_ANGLE_18 18
+#define SERVO_ANGLE_36 36
+#define SERVO_ANGLE_54 54
+#define SERVO_ANGLE_72 72
+#define SERVO_ANGLE_90 90
+#define SERVO_ANGLE_108 108
+#define SERVO_ANGLE_126 126
+#define SERVO_ANGLE_144 144
+#define SERVO_ANGLE_162 162
+#define SERVO_ANGLE_180 180
+
+#define SERVO_ANGLE_DEFAULT 0
+#define SERVO_GATE_OPEN 90
+#define SERVO_GATE_CLOSE 0
+
+
+#define SERVO_CH_0 0
+#define SERVO_CH_1 1
+
+#define SERVO_ENTRANCE_GATE 0
+#define SERVO_EXIT_GATE 1
+
 volatile int servo_count=0;
 
+volatile int servo_1_duty_ratio;
+volatile int servo_2_duty_ratio;
 
+
+void set_servo_angle(int ch, int angle);
+void set_gate_state(int ch, int state);
+void servo_release(int ch);
+
+//////////////////////////////
 
 int logojector_timer_flag=0;
 int start_after_verified_timer_flag=0;
@@ -208,32 +249,33 @@ ISR(TIMER0_COMP_vect) // 1khz 속도로 ISR 진입 1ms <-> 20ms
 	TICK.lcd_tick_1ms++;
 	TICK.exit_gate_tick_1ms++;
 	TICK.entrance_gate_tick_1ms++;
-// 	TICK.verified_tick_1ms++;
-// 	TICK.no_registered_tick_1ms++;
 	TICK.timeout_tick_1ms++;
 	
 	buzz_play(); //
 	
-	motor_drive();
+	//스텝모터 관련 코드임. 사용 안함.
+	//motor_drive();
 }
 
 ISR(TIMER1_OVF_vect){//5kHz마다 진입함
 	//PORTA^=0x01;
+	
+	//Q.인터럽트를 끄고 해당 구문을 수행하면, 다른 시스템에 의해 영향을 안받지 않을까 하는 생각.?????
+	//A.
+	cli();
 	if(servo_count==200){ 
 		servo_count=0; 
-		PORTA|=((1<<PORTA0)|(1<<PORTA3));
+		PORTA|=((servo_1_duty_ratio?(1<<PORTA0):0)|(servo_2_duty_ratio?(1<<PORTA3):0));
 	}
 	
-	if(servo_count==10) PORTA&=~(1<<PORTA0);
-	if(servo_count==20) PORTA&=~(1<<PORTA3);
+	if(servo_count==servo_1_duty_ratio) PORTA&=~(1<<PORTA0);
+	if(servo_count==servo_2_duty_ratio) PORTA&=~(1<<PORTA3);
 	
 	servo_count++;
+	sei();
 }
 
-volatile int dir=0;
-volatile unsigned char spd=9; //9 is default ! high speed & low current
-volatile int steps=0;
-volatile int set_step=0;
+
 //esp8266 테스트
 ISR(USART0_RX_vect)
 {
@@ -735,17 +777,6 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					setSoundClip(BUZZ_SUCCESS);
 					start_timer(AFTER_VERIFIED_EVENT); //ticktim을 0으로 클리어시킴.
 					
-					//set_step_dir_and_angle(STEP_MOTOR_CW,720);
-					//gate_busy_flag=1;
-					
-					//if(gate_busy_flag==0)
-					{
-						//set_gate_motor_state(GATE_ENT_OPEN); //한번 선언되면 gate_busy_flag가 활성화된다.
-					//	gate_busy_flag=1;
-					}
-					//명령 동작 중에 선언되면 모터 동작하지 않고 busy buffer에 저장된다	
-					//else gate_busy_buffer=GATE_ENT_OPEN;
-					
 					logojector_ON();
 				}
 				else {//한 번 초과로 인식시켰을 때 지나는 구문
@@ -755,16 +786,6 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					i2c_lcd_string(2,0,"Already Recognized");
 					setSoundClip(BUZZ_SUCCESS);
 					start_timer(AFTER_VERIFIED_EVENT); //ticktim을 0으로 클리어시킴.
-					//set_step_dir_and_angle(STEP_MOTOR_CW,720);
-					//gate_busy_flag=1;	
-					//if(gate_busy_flag==0)
-					{
-						//set_gate_motor_state(GATE_ENT_OPEN); //한번 선언되면 gate_busy_flag가 활성화된다.
-					//	gate_busy_flag=1;
-					}
-					//타이머 동작 중에 들어오는 상황
-					//else gate_busy_buffer=GATE_ENT_OPEN; //명령 동작 중에 선언되면 모터 동작하지 않고 busy buffer에 저장된다	
-					
 					logojector_ON();
 					
 				}
@@ -835,7 +856,7 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					setSoundClip(BUZZ_SUCCESS);
 				}//그곳 버퍼를 비움
 				
-			}
+			} 
 			//dummy test code
 			#if DUMMY_TEST_SERIAL
 				for(int i=0;i<MAX_USER_COUNT;i++){
@@ -1306,3 +1327,44 @@ void set_gate_motor_state(int state){
 		current_state_flag=GATE_EXT_OPEN;
 	}
 }
+
+
+
+void set_servo_angle(int ch, int angle) //어차피 지금 상황은 18도 단위로 밖에 컨트롤할 수 ㅏ밖에 없음.
+{//200 >> 10kHz속도로 ISR에 진입한다면, 200번 카운트되면 한 주기 
+//200번 카운트 = 20ms
+
+//5% : 10,
+//10% : 20.
+//만약 듀티를 1ms~2ms라고 한다면, 값 범위는 10~20
+//만약 듀티가 1.5ms~2.5ms라고 한다면, 값 범위는 15~25
+
+//////////////////
+// 0~ 180도 까지 설정
+// angle값은 0~180로 들어옴. 넣어야 되는 값은 0~10 angle/18 >> 1/18~= 0.05556
+	static int _offset=10;
+	int buffer = (int)(angle*0.05556);
+	if(ch==SERVO_ENTRANCE_GATE) servo_1_duty_ratio=_offset+buffer;
+	else if(ch==SERVO_EXIT_GATE)servo_2_duty_ratio=_offset+buffer;
+}
+void set_gate_state(int ch, int state){
+
+	//모터 활성화 시켜주고
+	servo_count=200; //오버플로
+	TIMSK |= ( 1<< TOIE1);
+	
+	
+	//
+	if(ch==SERVO_ENTRANCE_GATE){
+		set_servo_angle(SERVO_ENTRANCE_GATE, state);
+	}
+	else if(ch==SERVO_EXIT_GATE) {
+		set_servo_angle(SERVO_EXIT_GATE, state);
+	}
+}
+
+void servo_release(int ch)
+ {
+	 	if(ch==SERVO_ENTRANCE_GATE) servo_1_duty_ratio=0;
+	 	else if(ch==SERVO_EXIT_GATE)servo_2_duty_ratio=0;
+ }
