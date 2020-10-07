@@ -35,7 +35,8 @@ void timer1_init(){
 	//ICR=200이면, 2M/200 = 10KHz마다 오버플로 발생 == 0.1ms
 	//ICR=400이면, 2M/400 = 5KHz마다 오버플로 발생 == 0.2ms
 	//ICR 800 >> 2M/800 = 2.5kHz마다 오버플로발생 == 0.4ms
-	setICR1(200-1);
+	//setICR1(200-1);
+	setICR1(400-1);
 	TIMSK|=(1<<TOIE1);
 }
 

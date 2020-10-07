@@ -71,6 +71,7 @@
 
 //==================== start_timer_flag관련 define  =================//
 
+
 //===========================RFID 입력 flag==========================//
 #define DETECED 'O'
 #define NON_DETECTED 'X'
@@ -155,7 +156,7 @@ void request_reset_to_admin(char* state);
 void logojector_ON();
 void logojector_OFF();
 
-void flag_switch(int flag);
+//void flag_switch(int flag);
 
 
 #define STEP_MOTOR_CW 1
@@ -188,21 +189,11 @@ volatile int set_step=0;
 
 //서보모터 관련 함수 및 변수
 
-#define SERVO_ANGLE_0 0
-#define SERVO_ANGLE_18 18
-#define SERVO_ANGLE_36 36
-#define SERVO_ANGLE_54 54
-#define SERVO_ANGLE_72 72
-#define SERVO_ANGLE_90 90
-#define SERVO_ANGLE_108 108
-#define SERVO_ANGLE_126 126
-#define SERVO_ANGLE_144 144
-#define SERVO_ANGLE_162 162
-#define SERVO_ANGLE_180 180
+
 
 #define SERVO_ANGLE_DEFAULT 0
-#define SERVO_GATE_OPEN 90
-#define SERVO_GATE_CLOSE 0
+#define SERVO_GATE_OPEN 7
+#define SERVO_GATE_CLOSE 2
 
 
 #define SERVO_CH_0 0
@@ -211,13 +202,13 @@ volatile int set_step=0;
 #define SERVO_ENTRANCE_GATE 0
 #define SERVO_EXIT_GATE 1
 
-volatile int servo_count=0;
+volatile unsigned char servo_count=0;
 
 volatile int servo_1_duty_ratio;
 volatile int servo_2_duty_ratio;
 
 
-void set_servo_angle(int ch, int angle);
+void set_servo(int ch, int angle_state);
 void set_gate_state(int ch, int state);
 void servo_release(int ch);
 
@@ -235,23 +226,56 @@ int gate_busy_buffer=0; //A사용자가 카드를 찍은 뒤 동작 중인 상�
 
 
 int start_timeout_count_flag=1;
+
+
+
+#define TICK_BUZZ 1
+#define TICK_LOGOJECTOR 2
+#define TICK_LCD 3
+#define TICK_EXIT_GATE 4
+#define TICK_ENTRANCE_GATE 5
+#define TICK_TIMEOUT 6
+
+volatile int buzz_tick_enable_flag, logojector_tick_enable_flag, lcd_tick_enable_flag;
+volatile int timeout_tick_enable_flag, exit_gate_tick_enable_flag, entrance_gate_tick_enable_flag;
+
+
+void tick_enable(int tick_name);
+void tick_disable(int tick_name);
+
 ISR(TIMER0_COMP_vect) // 1khz 속도로 ISR 진입 1ms <-> 20ms
 {
 	//dummy code to check 
 	//PORTA ^=0x02;
+	/**/
+	//tick을 하나만 살렸을 때 아래 구문을 처리하는 속도는 3.25us
+	//모든 tick을 다 살렸을 때 아래 구문을 처리하는 속도는 11us
+	//즉 하나 처리하는데 걸리는 시간 대략 1.25us
+	//PORTA^=0x80;
 	
-// 	static u32 ticks=0;
-// 	ticks++;
-// 	if(ticks%10==0){//0.1khz마다 증가
-	TICK.buzz_1ms++;
+	
+	//system tick timer
 	TICK.tick_1ms++;
-	TICK.logojector_tick_1ms++;
-	TICK.lcd_tick_1ms++;
-	TICK.exit_gate_tick_1ms++;
-	TICK.entrance_gate_tick_1ms++;
-	TICK.timeout_tick_1ms++;
 	
-	buzz_play(); //
+	
+	
+	if(logojector_tick_enable_flag)TICK.logojector_tick_1ms++;
+	
+	
+	if(lcd_tick_enable_flag)TICK.lcd_tick_1ms++;
+	
+	
+	if(exit_gate_tick_enable_flag)TICK.exit_gate_tick_1ms++;
+	if(entrance_gate_tick_enable_flag)TICK.entrance_gate_tick_1ms++;
+	
+	//맨 처음 초기화 할 때 사용하는 tick
+	if(timeout_tick_enable_flag)TICK.timeout_tick_1ms++;
+	
+	if(buzz_tick_enable_flag){
+		TICK. buzz_1ms++;buzz_play(); 
+	}
+	//PORTA^=0x80;
+	// 얘 처리 속도는 2us
 	
 	//스텝모터 관련 코드임. 사용 안함.
 	//motor_drive();
@@ -262,18 +286,23 @@ ISR(TIMER1_OVF_vect){//5kHz마다 진입함
 	
 	//Q.인터럽트를 끄고 해당 구문을 수행하면, 다른 시스템에 의해 영향을 안받지 않을까 하는 생각.?????
 	//A.
-	cli();
-	if(servo_count==200){ 
-		servo_count=0; 
-		PORTA|=((servo_1_duty_ratio?(1<<PORTA0):0)|(servo_2_duty_ratio?(1<<PORTA3):0));
+	//cli();
+	if(servo_count==100)
+	{
+		PORTA|=( (servo_1_duty_ratio?(1<<PORTA0):0)|(servo_2_duty_ratio?(1<<PORTA3):0) );
+		servo_count=0;
+		
 	}
-	
 	if(servo_count==servo_1_duty_ratio) PORTA&=~(1<<PORTA0);
 	if(servo_count==servo_2_duty_ratio) PORTA&=~(1<<PORTA3);
 	
+	
 	servo_count++;
-	sei();
+	//sei();
 }
+
+
+
 
 
 //esp8266 테스트
@@ -281,6 +310,20 @@ ISR(USART0_RX_vect)
 {
 	uint8_t buff=UDR0;
 	uart0.buf=buff;
+	
+// 	if('a'==buff){
+// 		if(servo_1_duty_ratio)uart0_tx_char('a');
+// 		else uart0_tx_char('x');
+// 	}
+
+
+// 	if('0'<=buff&&buff<='9')
+// 	{
+// 		
+// 	servo_1_duty_ratio = 
+// 	servo_2_duty_ratio = 
+// 		
+// 	}
 // 	if((buff=='a')||(buff=='s')||(buff=='d'))dir=buff;
 // 	else if(('0'<=buff)&&(buff<='9')){
 // 		spd=buff-'0';
@@ -346,6 +389,21 @@ int main(void)
 	
 	systems_init();
 	
+
+	set_servo(SERVO_EXIT_GATE,SERVO_GATE_CLOSE);
+	set_servo(SERVO_ENTRANCE_GATE,SERVO_GATE_CLOSE);
+	//set_servo_angle(SERVO_CH_1,SERVO_ANGLE_0);
+	_delay_ms(500);
+ 	servo_release(SERVO_CH_0);
+ 	servo_release(SERVO_CH_1);
+	
+	
+	
+	
+	//dummy
+	DDRA|=0x80;
+	
+	//_delay_ms(500)
 	//dummy
 	//DDRF|=0x01;
 	
@@ -371,103 +429,77 @@ int main(void)
 		RC522_data_state_check_and_actuate(&toggle);
 		
 		//입장 시, 확인이 성공된 유저의 경우
-		if(logojector_timer_flag)
+		if(logojector_tick_enable_flag)
 		{
 				if(TICK.logojector_tick_1ms>30000)
 				{
 					//로고젝터 오프
 					logojector_OFF();
-					logojector_timer_flag=STOP_TIMER;
+					
+					tick_disable(TICK_LOGOJECTOR);
+					logojector_tick_enable_flag=STOP_TIMER;
 				}
 		}
 		//명령이 동시에 발생할 때, 백라이트 끄는 함수가 호출되지 않는 상황이 생겼다. 이에 대한 처리코드
 		//그냥 구문을 아예 따로 lcd관련해서 timer를 분리하였다.
-		if(lcd_timer_flag)
+		if(lcd_tick_enable_flag)
 		{
 			if(TICK.lcd_tick_1ms==12000)
 			{
 				i2c_lcd_noBacklight();
-				lcd_timer_flag=STOP_TIMER;
+				tick_disable(TICK_LCD);
+				lcd_tick_enable_flag=STOP_TIMER;
 			}
 		}
 
 		//입구에서 등록된 유저가 카드를 찍었을 때 해당 구문을 돈다.
-		if(start_after_verified_timer_flag)
+		if(entrance_gate_tick_enable_flag)
 		{//이미 인식되었던 사람들도 마찬가지 과정을 거침
 			
 			//가끔 여기 문을 안들어감 뭐가 문젠지는 확인이 안됨. 
-			if(TICK.tick_1ms==10000)//10초
+			if(TICK.entrance_gate_tick_1ms==1000) servo_release(SERVO_ENTRANCE_GATE);
+			else if(TICK.entrance_gate_tick_1ms==10000)//10초
 			{
-				//setSoundClip(BUZZ_ON);
-				//문을 닫아주는 방향으로 모터를 돌림
-				//set_gate_motor_state(GATE_CLOSE);
-				//set_step_dir_and_angle(STEP_MOTOR_CCW,720);
+				//수정희망(멜로디 변경)
+				setSoundClip(BUZZ_ESP8266_CONNECTED);
+				//입구 서보모터 닫는 명령
+				set_servo(SERVO_ENTRANCE_GATE,SERVO_GATE_CLOSE);
 			}
-			else if(TICK.tick_1ms==12000){//12초
-			
-				start_after_verified_timer_flag=STOP_TIMER;
+			else if(TICK.entrance_gate_tick_1ms==12000)
+			{//12초
 				
-				//발생할 버그 상황 해결을 위한 코드
-				//만일 입구열림 상태 도중 출구에서 카드가 찍힌 상태라면 아래 블럭에 진입한다.
-				//if(gate_busy_flag&&(gate_busy_buffer!=GATE_CLOSE))
-				{
-					//set_gate_motor_state(gate_busy_buffer);
-					//gate_busy_buffer=GATE_CLOSE; 
-					//start_timer(AFTER_EXIT_USER_EVENT);
-
-					//출구 동작을 이후에 수행해줘야 함
-					//TICK.tick_1ms=0;
-					//start_after_exit_user_timer_flag=1;
-					
-				}
-				//gate_busy_flag=0;
+				servo_release(SERVO_ENTRANCE_GATE);
+				tick_disable(TICK_ENTRANCE_GATE);
+				entrance_gate_tick_enable_flag=STOP_TIMER;
+				
+				
+				//입구 서보모터 릴리즈	
 			}
 			
 		}
-		if (start_after_exit_user_timer_flag)
+		if (exit_gate_tick_enable_flag)
 		{
-			//add some codes
-			//PORTF^=0x01;
-			if(TICK.tick_1ms==10000)//5초
+
+			if(TICK.exit_gate_tick_1ms==1000) servo_release(SERVO_EXIT_GATE);
+			else if(TICK.exit_gate_tick_1ms==10000)//5초
 			{
-				//setSoundClip(BUZZ_ON); //전까진 소리 났음
-				
-				//테스트 라인임 없애도 됌 근데 정상적으로 동작하는지 확인하기 위함
-				//set_step_dir_and_angle(STEP_MOTOR_CCW,720); //된다
-				
-				//set_gate_motor_state(GATE_CLOSE);
+				//수정희망(멜로디 변경)
+				setSoundClip(BUZZ_ESP8266_CONNECTED);
+				//출구 서보모터 닫는 명령
+				set_servo(SERVO_EXIT_GATE,SERVO_GATE_CLOSE);
 			}
-			else if(TICK.tick_1ms==12000){//10초
+			else if(TICK.exit_gate_tick_1ms==12000){//10초
 				//10초가 지나면 화면 클리어시키고, 백라이트 꺼줌
 				//i2c_lcd_noBacklight();
-				start_after_exit_user_timer_flag=STOP_TIMER;
 				
-				//발생할 버그 상황 해결을 위한 코드
-				//만일 출구열림 상태 도중 입구에서 카드가 찍혔다면?
-				//if(gate_busy_flag&&(gate_busy_buffer!=GATE_CLOSE))
-				{
-				//	set_gate_motor_state(gate_busy_buffer);
-				//	gate_busy_buffer=GATE_CLOSE;
-
-					//입구 동작을 이후에 수행해줘야 함
-				//	TICK.tick_1ms=0;
-				//	start_after_verified_timer_flag=1;
-				}
-				//gate_busy_flag=0;
+				//출구 서보모터 릴리즈
+				servo_release(SERVO_EXIT_GATE);
+				tick_disable(TICK_EXIT_GATE);
+				exit_gate_tick_enable_flag=STOP_TIMER;
+				
+				
 			}
 		}
-		
-		//입장 시, 미 등록된 유저의 경우
-		//이 블럭이 있어야되나 모르겠다. 위에 다르게 구현해놓긴했다. 일단 주석처리
-// 		if(start_after_no_registered_timer_flag)
-// 		{
-// 			// add some codes
-// 			if(TICK.tick_1ms==12000){//10초
-// 				//10초가 지나면 화면 클리어시키고, 백라이트 꺼줌
-// 				//i2c_lcd_noBacklight();
-// 				start_after_no_registered_timer_flag=STOP_TIMER;
-// 			}
-// 		}
 
 
 		//dummy code
@@ -490,6 +522,9 @@ void systems_init(void){
 	timer0_init();
 	timer1_init();
 	timer3_init();
+	
+	tick_enable(TICK_TIMEOUT);
+	
 	sei(); //전역 인터럽트 허용
 	TICK.tick_1ms=0;
 	//사용하는 기능들 초기화 작업
@@ -531,6 +566,8 @@ void systems_init(void){
 		i2c_lcd_clear();
 		i2c_lcd_noBacklight();
 	#endif
+	tick_disable(TICK_TIMEOUT);
+	
 }
 
 char mfrc_check_and_data_receive_ch0(void){ 
@@ -716,14 +753,14 @@ void RC522_data_state_check_and_actuate(char *tggl)
 			}
 			uart1_tx_string("\r\n");
 
-			/*이 부분은 esp8266 구현한 뒤에 넣어야 된다.*/
-			//전송 후, 서버에서 결과물을 다시 전송해주기까지 대기
+			
+			//esp8266을 통해 uid전송 후, 서버에서 결과물을 다시 전송해주기까지 대기
 			while(!esp8266_receiving_flag); //ISR내에서 버퍼에 모두 담을때 까지 대기 esp8266_received_data[] 에 저장
 			esp8266_receiving_flag=0;
 			//esp8266_receive_complete_flag=0;
 			if(esp8266_received_data[0]=='O'){
 				//DB 테이블에 존재하는 uid일 경우 해당 구문을 들어옴
-
+				
 				strncpy((char*)esp8266_received_data,"  ",2);
 				
 				//현재 입장객 버퍼 비어있는 인덱스 체크
@@ -757,10 +794,8 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					if(user_count<MAX_USER_COUNT)user_count++; //단, 주차장 최대 수용 수 보다는 작아야 함.
 							
 					char MAX_USER_COUNT_STR[4];
-					strcpy(MAX_USER_COUNT_STR,IntToString((int)MAX_USER_COUNT));
-					
 					char USER_COUNT_STR[4];
-					//char dummy_value=1;
+					strcpy(MAX_USER_COUNT_STR,IntToString((int)MAX_USER_COUNT));
 					strcpy(USER_COUNT_STR,IntToString((int)MAX_USER_COUNT-user_count));
 					
 					char empty_space_str[20]="Empty Space=[";
@@ -769,35 +804,46 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					strcat((char*)empty_space_str,MAX_USER_COUNT_STR);
 					strcat((char*)empty_space_str,"]");
 					//start_timer(); //ticktim을 0으로 클리어시킴.
+					
+					//서보모터 입구 오픈 코드 작성
+					
+					//set_gate_state(SERVO_ENTRANCE_GATE,SERVO_GATE_OPEN);
+					set_servo(SERVO_ENTRANCE_GATE,SERVO_GATE_OPEN); //2 == 딱 중간, 7 == 180도
+					start_timer(TICK_ENTRANCE_GATE); //ticktim을 0으로 클리어시킴.
+					logojector_ON();
+					
 					//LCD ON
 					i2c_lcd_clear();
 					i2c_lcd_string(0,0,"Welcome,");
 					i2c_lcd_string(1,0,(char*)esp8266_received_data);
 					i2c_lcd_string(2,0,(char*)empty_space_str);
 					setSoundClip(BUZZ_SUCCESS);
-					start_timer(AFTER_VERIFIED_EVENT); //ticktim을 0으로 클리어시킴.
-					
-					logojector_ON();
 				}
 				else {//한 번 초과로 인식시켰을 때 지나는 구문
+					
+					//서보모터 입구 오픈 코드 작성
+					
+					set_servo(SERVO_ENTRANCE_GATE,SERVO_GATE_OPEN); //2 == 딱 중간, 7 == 180도
+					start_timer(TICK_ENTRANCE_GATE); //ticktim을 0으로 클리어시킴.
+					logojector_ON();
+					//LCD ON
 					i2c_lcd_clear();  
 					i2c_lcd_string(0,0,"Welcome,");
 					i2c_lcd_string(1,2,(char*)esp8266_received_data);
 					i2c_lcd_string(2,0,"Already Recognized");
-					setSoundClip(BUZZ_SUCCESS);
-					start_timer(AFTER_VERIFIED_EVENT); //ticktim을 0으로 클리어시킴.
-					logojector_ON();
 					
+					setSoundClip(BUZZ_SUCCESS);
 				}
 			}//if(esp8266_received_data[0]=='O') end
 			else if(esp8266_received_data[0]!='O') 
 			{
+				start_timer(TICK_LCD);
+				setSoundClip(BUZZ_NOT_REGISTERED);
+				
 				i2c_lcd_clear();
 				i2c_lcd_string(0,0,"Sorry,");
 				i2c_lcd_string(1,2,"This card is");
 				i2c_lcd_string(2,2,"not registered.");
-				start_timer(AFTER_NON_REGISTERED_EVENT);
-				setSoundClip(BUZZ_NOT_REGISTERED);
 			}
 			//_delay_ms(20);
 			//dummy test code (서버로부터 결과 값 수신 결과 확인)
@@ -844,15 +890,12 @@ void RC522_data_state_check_and_actuate(char *tggl)
 					strcpy((char*)rfid_user_uid_buffer[i],"0000");
 					//절대 버퍼에는 중복되는 값이 들어가지 않도록 코드가 작성되어 있기 때문에 여기다가 명령구문을 넣어도 될듯
 					user_count--; //이용자 카운트를 감소시킴.
-					start_timer(AFTER_EXIT_USER_EVENT); //ticktim을 0으로 클리어시킴.
-					//if(gate_busy_flag==0)
-					{//한번 선언되면 gate_busy_flag가 활성화된다.
-						//set_gate_motor_state(GATE_EXT_OPEN);
-					//	gate_busy_flag=1;
-					} 
-					//else gate_busy_buffer = GATE_EXT_OPEN; //명령 동작 중에 선언되면 모터 동작하지 않고 busy buffer에 저장된다	
 					
-					//gate_busy_flag=1;
+					//출구 서보모터 동작 코드
+					set_servo(SERVO_EXIT_GATE,SERVO_GATE_OPEN); //3 == 딱 중간, 7 == 180도
+					start_timer(TICK_EXIT_GATE); //틱 활성화 및 카운트 시작
+					
+					//수정요청(멜로디)
 					setSoundClip(BUZZ_SUCCESS);
 				}//그곳 버퍼를 비움
 				
@@ -1040,10 +1083,11 @@ void esp8266_init(unsigned char* ssid, unsigned char* pw, unsigned char * ip, un
 }
 
 
-
+//부저 관련 함수들
 void setSoundClip(char clip){
 	 // 부저 관련 tick.clear
-	 TICK.buzz_1ms=0;
+	 
+	
 	 switch(clip)
 	 {
 		 
@@ -1055,10 +1099,9 @@ void setSoundClip(char clip){
 		   case BUZZ_ESP8266_CONNECTED: music_flag=BUZZ_ESP8266_CONNECTED; break;
 		   
 	 }
-	 TICK.buzz_1ms=0;
+	 tick_enable(TICK_BUZZ); //여기 안에 TICK.buzz_1ms=0해주는 코드가 포함되어 있음.
+	  //TICK.buzz_1ms=0;
 }
-
-
 void buzz_play(){
 	 //재생이 끝났으면 music_flag는 확실하게 MUTE로 들어가야 함. 안그러면 꼬이는 것 같다.
 	  switch(music_flag)
@@ -1071,7 +1114,7 @@ void buzz_play(){
 		   else if(TICK.buzz_1ms==400) setSoundNote(A);
 		   else if(TICK.buzz_1ms==600) setSoundNote(BUZZ_B);
 		   else if(TICK.buzz_1ms==800) setSoundNote(BUZZ_Cs);
-		   else if(TICK.buzz_1ms==1200) buzz_MUTE();
+		   else if(TICK.buzz_1ms==1200) {buzz_MUTE(); }
 		   break;
 
 		  case BUZZ_SUCCESS:
@@ -1110,6 +1153,9 @@ void buzz_play(){
 void buzz_MUTE(){
 	 TCCR3A &= ~(1<<COM3A0); // 타이머카운터3번 A채널 고유 핀 출력 X
 	 music_flag = BUZZ_MUTE;
+	 
+	 tick_disable(TICK_BUZZ);
+	 
 	 /*setSoundClip(BUZZ_MUTE);*/
 }
 void setSoundNote(int note){
@@ -1119,19 +1165,13 @@ void setSoundNote(int note){
 	 else {TCCR3A &= ~(1<<COM3A0);}
 	 
 }
+///////////////////////////////////////
 
-void start_timer(int flag)
-{
-	
-	//모터 관련된 플래그는 따로 구현해야 될듯
-	//flag를 실패 성공 다 나누지 말고, 출구 입구에 대한 플래그만 나눌까?
-	TICK.tick_1ms=0;
-	if(flag!=AFTER_EXIT_USER_EVENT)TICK.lcd_tick_1ms=0; // LCD가 출력되는 모든 상황에서 lcd tick 초기화가 된다.
-	if(flag==AFTER_VERIFIED_EVENT)TICK.logojector_tick_1ms=0;
-	//셋된 플래그들에 맞게 타이머 감지를 시작함.
-	flag_switch(flag);
-		
-}
+
+
+
+
+//타임아웃 관련 함수들
 void start_timeout_count(void){
 	TICK.timeout_tick_1ms=0;
 	start_timeout_count_flag=0;
@@ -1156,7 +1196,11 @@ void request_reset_to_admin(char* state)
 	i2c_lcd_string(2,0,"Plz, Trying reset.");
 	i2c_lcd_string(3,0,buf);//따로 전역으로 빼주지 않아도 상관없음. 함수 안에서 다 처리하므로.
 }
+////////////////////////////////////////////////
 
+
+
+//로고젝터 제어 함수
 void logojector_ON(void){
 	PORTC|=(1<<4);
 }
@@ -1164,173 +1208,11 @@ void logojector_OFF(void){
 	unsigned char buff = ~(1<<4); //자료형이 확실하지 않기 때문에, 확실하게 선언해준 buff를 이용
 	PORTC&=buff;
 }
-
-
-void flag_switch(int flag)
-{
-	
-	/*
-	#define AFTER_VERIFIED_EVENT 1
-	#define AFTER_EXIT_USER_EVENT 2
-	#define AFTER_NON_REGISTERED_EVENT -1
-	#define STOP_TIMER 0
-	*/
-	
-	/*
-	int start_after_verified_timer_flag=1;
-	int start_after_no_registered_timer_flag=1;
-	int start_after_exit_user_timer_flag=1;
-	*/
-	switch(flag)
-	{
-		case  AFTER_VERIFIED_EVENT: 
-			start_after_exit_user_timer_flag=0;
-			start_after_no_registered_timer_flag=0;
-			start_after_verified_timer_flag=1;
-			logojector_timer_flag=1;
-			lcd_timer_flag=1;
-		break;
-		case AFTER_NON_REGISTERED_EVENT:
-			start_after_exit_user_timer_flag=0;
-			start_after_no_registered_timer_flag=1;
-			start_after_verified_timer_flag=0;
-			lcd_timer_flag=1;
-		break;
-		
-		case AFTER_EXIT_USER_EVENT:
-			start_after_exit_user_timer_flag=1;
-			start_after_no_registered_timer_flag=0;
-			start_after_verified_timer_flag=0;
-		break;
-		
-	}
-}
-
-
-void set_step_rot(int dir){
-	static uint32_t i =0;
-	if(dir==STEP_MOTOR_CW)i++;
-	else if(dir==STEP_MOTOR_CCW)i--;
-	
-	if(dir)PORTA=(step_motor_rot[i%4]);
-	else PORTA=STEP_MOTOR_DIABLE;
-}
-
-
-//0~9단계 까지 가능 
-int set_step_speed(int _spd){
-	return (11-_spd);
-}
-//0~9
-//속도는 2ms 갱신이 가장 이상적이며 160mA를 소모함
-// 1ms갱신의 경우 제대로 동작하지 않음
-// 갱신속도를 느리게 할 수록 속도가 느려지며, 전류소모도 이상하게 더 커짐
-//한바퀴는 200스텝?
-void motor_drive(){
-	if(set_motor_flag)
-	{
-		if(TICK.tick_1ms%set_step_speed(spd)==0) //103~5 (
-		{
-			//setSoundClip(BUZZ_ESP8266_CONNECTED);
-			
-			if(steps<set_step){
-				if(dir==STEP_MOTOR_CW)set_step_rot(STEP_MOTOR_CW);
-				else if(dir==STEP_MOTOR_CCW) set_step_rot(STEP_MOTOR_CCW);
-				else set_step_rot(0);
-				steps++;
-			}
-			else {
-				set_motor_flag=0;
-				steps=0;
-				set_step_rot(0);
-// 				dir=0;
-// 				set_step=0;
-			}
-		} 
-	}
-}
-
-void set_step_dir_and_angle(int direction,int angle){
-	//
-	dir=direction;
-	//angle   1.8도 == 1 <==> 360도 == 200
-	set_step=(int)(angle*0.556);
-	set_motor_flag=1;
-}
-
-void set_gate_motor_state(int state){
-	//동일 명령이 계속 들어오면 그떄는 무시하도록 
-	//다른 명령이 들어올 때만 인정
-	
-	//
-	static int current_state_flag; //직전 상태 
-	
-	
-	//동시에 게이트 동작 명령 내리는 상황을 방지하기 위한 코드
-// 	if(state!=GATE_CLOSE)
-// 	{
-//  		if(gate_busy_flag){ //이미 동작되어 있는 상태일 때 
-//  			gate_busy_buff=state; //1또는 -1이 들어가며, 0이면 아무것도 아닌 상태
-//  			return;
-//  		}//그게 아니라면 첫 동작이므로 buff에 현재 상태를 저장하지 않는다.
-// 		gate_busy_flag=1;
-// 		
-// 	}
-	if(state==GATE_ENT_OPEN)
-	{
-		if(current_state_flag==GATE_ENT_OPEN) return; //중복으로 입력했다면 무시
-		else//이전과 다른 명령이 들어왔다면
-		{
-			switch(current_state_flag){
-				case GATE_CLOSE://닫혀있다가 > 입구 오픈 명령
-					set_step_dir_and_angle(STEP_MOTOR_CW,360);
-				break;
-				case GATE_EXT_OPEN: //출구오픈상태 > 입구 오픈 명령
-					set_step_dir_and_angle(STEP_MOTOR_CW,720);
-				break;
-			}	
-		
-		}
-		current_state_flag=GATE_ENT_OPEN;
-	}
-	
-	else if(state==GATE_CLOSE)
-	{
-		if(current_state_flag==GATE_CLOSE) return;
-		else
-		{
-			switch(current_state_flag){
-				case GATE_ENT_OPEN://입구오픈상태에서 닫힘명령
-					set_step_dir_and_angle(STEP_MOTOR_CCW,360);
-				break;
-				case GATE_EXT_OPEN://출구오픈상태에서 닫힘명령
-					set_step_dir_and_angle(STEP_MOTOR_CW,360);
-				break;
-			}
-		}
-		current_state_flag=GATE_CLOSE;
-	}
-	else if(state==GATE_EXT_OPEN)
-	{
-		if(current_state_flag==GATE_EXT_OPEN) return;
-		else
-		{
-			switch(current_state_flag){
-				case GATE_ENT_OPEN: //입구오픈상태에서 출구오픈명령
-				set_step_dir_and_angle(STEP_MOTOR_CCW,720);
-				break;
-				case GATE_CLOSE: //닫힌 상태에서  출구오픈명령
-				set_step_dir_and_angle(STEP_MOTOR_CCW,360);
-				break;
-			}
-		}
-		current_state_flag=GATE_EXT_OPEN;
-	}
-}
+///////////////////////////////////////////////
 
 
 
-void set_servo_angle(int ch, int angle) //어차피 지금 상황은 18도 단위로 밖에 컨트롤할 수 ㅏ밖에 없음.
+void set_servo(int ch, int angle_state) //어차피 지금 상황은 18도 단위로 밖에 컨트롤할 수 ㅏ밖에 없음.
 {//200 >> 10kHz속도로 ISR에 진입한다면, 200번 카운트되면 한 주기 
 //200번 카운트 = 20ms
 
@@ -1339,32 +1221,206 @@ void set_servo_angle(int ch, int angle) //어차피 지금 상황은 18도 단�
 //만약 듀티를 1ms~2ms라고 한다면, 값 범위는 10~20
 //만약 듀티가 1.5ms~2.5ms라고 한다면, 값 범위는 15~25
 
+
+// 100 > 5kHz속도로 IS에 진입 100번 카운트 되면 한 주기 
+// 100번카운트 = 20ms, 1번카운트 0.2ms 
+//1ms~2ms : 5~10
+//넣어야 되는 값은 0~5 angle/36 >> 1/36 = 0.02778
+
+//==>> 현재 사용중인 서보모터 같은 경우, 구데기이므로 위와 같은 펄스로는 제대로 동작하지 않는다.
+// 유효 범위는 duty 3%~이며, 5%일 경우 90도 값을 갖는다. 10%일 경우 180도 값을 갖는다
+
 //////////////////
 // 0~ 180도 까지 설정
 // angle값은 0~180로 들어옴. 넣어야 되는 값은 0~10 angle/18 >> 1/18~= 0.05556
-	static int _offset=10;
-	int buffer = (int)(angle*0.05556);
-	if(ch==SERVO_ENTRANCE_GATE) servo_1_duty_ratio=_offset+buffer;
-	else if(ch==SERVO_EXIT_GATE)servo_2_duty_ratio=_offset+buffer;
+	static int _offset=3;
+	//int buffer = (int)(angle*0.05556);
+	//int buffer = (int)(angle*0.027778);
+	if(ch==SERVO_ENTRANCE_GATE) servo_1_duty_ratio=_offset+angle_state;
+	else if(ch==SERVO_EXIT_GATE)servo_2_duty_ratio=_offset+angle_state;
+	
+	
+	
 }
+//안씀
 void set_gate_state(int ch, int state){
 
 	//모터 활성화 시켜주고
-	servo_count=200; //오버플로
+	servo_count=100; //오버플로
 	TIMSK |= ( 1<< TOIE1);
 	
 	
 	//
 	if(ch==SERVO_ENTRANCE_GATE){
-		set_servo_angle(SERVO_ENTRANCE_GATE, state);
+		set_servo(SERVO_ENTRANCE_GATE, state);
 	}
 	else if(ch==SERVO_EXIT_GATE) {
-		set_servo_angle(SERVO_EXIT_GATE, state);
+		set_servo(SERVO_EXIT_GATE, state);
 	}
 }
 
-void servo_release(int ch)
+void servo_release(int ch) {
+	
+	 	if(ch==SERVO_ENTRANCE_GATE) {servo_1_duty_ratio=0; }//PORTA&=~(1<<PORTA0);
+	 	else if(ch==SERVO_EXIT_GATE){servo_2_duty_ratio=0;} //PORTA&=~(1<<PORTA3);
+	
+ }
+ 
+ void start_timer(int flag)
  {
-	 	if(ch==SERVO_ENTRANCE_GATE) servo_1_duty_ratio=0;
-	 	else if(ch==SERVO_EXIT_GATE)servo_2_duty_ratio=0;
+	 TICK.tick_1ms=0;
+	 if(flag!=TICK_EXIT_GATE){// LCD가 출력되는 모든 상황에서 lcd tick 초기화가 된다.
+		 TICK.lcd_tick_1ms=0;lcd_tick_enable_flag=1;
+	 } 
+	 
+
+	 //셋된 플래그들에 맞게 타이머 감지를 시작함.
+	 tick_enable(flag);
+	 
+ }
+ 
+ void tick_enable(int tick_name){
+	 switch(tick_name){
+		 case TICK_BUZZ: TICK.buzz_1ms=0; buzz_tick_enable_flag=1; break;
+		 case TICK_LOGOJECTOR:TICK.logojector_tick_1ms=0; logojector_tick_enable_flag=1; break;
+		 //case TICK_LCD: lcd_tick_enable_flag=1;
+		 case TICK_EXIT_GATE: TICK.exit_gate_tick_1ms=0; exit_gate_tick_enable_flag=1; break;
+		 case TICK_ENTRANCE_GATE: TICK.entrance_gate_tick_1ms=0; entrance_gate_tick_enable_flag=1; break;
+		 case TICK_TIMEOUT :TICK.timeout_tick_1ms=0; timeout_tick_enable_flag=1; break;
+	 }
+ }
+ 
+ void tick_disable(int tick_name){
+	 switch(tick_name){
+		 case TICK_BUZZ: buzz_tick_enable_flag=0; break;
+		 case TICK_LOGOJECTOR:logojector_tick_enable_flag=0; break;
+		 case TICK_LCD: lcd_tick_enable_flag=0; break;
+		 case TICK_EXIT_GATE: exit_gate_tick_enable_flag=0; break;
+		 case TICK_ENTRANCE_GATE: entrance_gate_tick_enable_flag=0; break;
+		 case TICK_TIMEOUT: timeout_tick_enable_flag=0; break;	  
+	 }
+ }
+ 
+ 
+ 
+ //================================================ 안 쓰는 함수 ======================================//
+ void set_step_rot(int dir){
+	 static uint32_t i =0;
+	 if(dir==STEP_MOTOR_CW)i++;
+	 else if(dir==STEP_MOTOR_CCW)i--;
+	 
+	 if(dir)PORTA=(step_motor_rot[i%4]);
+	 else PORTA=STEP_MOTOR_DIABLE;
+ }
+
+
+ //0~9단계 까지 가능
+ int set_step_speed(int _spd){
+	 return (11-_spd);
+ }
+ //0~9
+ //속도는 2ms 갱신이 가장 이상적이며 160mA를 소모함
+ // 1ms갱신의 경우 제대로 동작하지 않음
+ // 갱신속도를 느리게 할 수록 속도가 느려지며, 전류소모도 이상하게 더 커짐
+ //한바퀴는 200스텝?
+ void motor_drive(){
+	 if(set_motor_flag)
+	 {
+		 if(TICK.tick_1ms%set_step_speed(spd)==0) //103~5 (
+		 {
+			 //setSoundClip(BUZZ_ESP8266_CONNECTED);
+			 
+			 if(steps<set_step){
+				 if(dir==STEP_MOTOR_CW)set_step_rot(STEP_MOTOR_CW);
+				 else if(dir==STEP_MOTOR_CCW) set_step_rot(STEP_MOTOR_CCW);
+				 else set_step_rot(0);
+				 steps++;
+			 }
+			 else {
+				 set_motor_flag=0;
+				 steps=0;
+				 set_step_rot(0);
+				 // 				dir=0;
+				 // 				set_step=0;
+			 }
+		 }
+	 }
+ }
+
+ void set_step_dir_and_angle(int direction,int angle){
+	 //
+	 dir=direction;
+	 //angle   1.8도 == 1 <==> 360도 == 200
+	 set_step=(int)(angle*0.556);
+	 set_motor_flag=1;
+ }
+
+ void set_gate_motor_state(int state){
+	 //동일 명령이 계속 들어오면 그떄는 무시하도록
+	 //다른 명령이 들어올 때만 인정
+	 
+	 //
+	 static int current_state_flag; //직전 상태
+	 
+	 
+	 //동시에 게이트 동작 명령 내리는 상황을 방지하기 위한 코드
+	 // 	if(state!=GATE_CLOSE)
+	 // 	{
+	 //  		if(gate_busy_flag){ //이미 동작되어 있는 상태일 때
+	 //  			gate_busy_buff=state; //1또는 -1이 들어가며, 0이면 아무것도 아닌 상태
+	 //  			return;
+	 //  		}//그게 아니라면 첫 동작이므로 buff에 현재 상태를 저장하지 않는다.
+	 // 		gate_busy_flag=1;
+	 //
+	 // 	}
+	 if(state==GATE_ENT_OPEN)
+	 {
+		 if(current_state_flag==GATE_ENT_OPEN) return; //중복으로 입력했다면 무시
+		 else//이전과 다른 명령이 들어왔다면
+		 {
+			 switch(current_state_flag){
+				 case GATE_CLOSE://닫혀있다가 > 입구 오픈 명령
+				 set_step_dir_and_angle(STEP_MOTOR_CW,360);
+				 break;
+				 case GATE_EXT_OPEN: //출구오픈상태 > 입구 오픈 명령
+				 set_step_dir_and_angle(STEP_MOTOR_CW,720);
+				 break;
+			 }
+			 
+		 }
+		 current_state_flag=GATE_ENT_OPEN;
+	 }
+	 
+	 else if(state==GATE_CLOSE)
+	 {
+		 if(current_state_flag==GATE_CLOSE) return;
+		 else
+		 {
+			 switch(current_state_flag){
+				 case GATE_ENT_OPEN://입구오픈상태에서 닫힘명령
+				 set_step_dir_and_angle(STEP_MOTOR_CCW,360);
+				 break;
+				 case GATE_EXT_OPEN://출구오픈상태에서 닫힘명령
+				 set_step_dir_and_angle(STEP_MOTOR_CW,360);
+				 break;
+			 }
+		 }
+		 current_state_flag=GATE_CLOSE;
+	 }
+	 else if(state==GATE_EXT_OPEN)
+	 {
+		 if(current_state_flag==GATE_EXT_OPEN) return;
+		 else
+		 {
+			 switch(current_state_flag){
+				 case GATE_ENT_OPEN: //입구오픈상태에서 출구오픈명령
+				 set_step_dir_and_angle(STEP_MOTOR_CCW,720);
+				 break;
+				 case GATE_CLOSE: //닫힌 상태에서  출구오픈명령
+				 set_step_dir_and_angle(STEP_MOTOR_CCW,360);
+				 break;
+			 }
+		 }
+		 current_state_flag=GATE_EXT_OPEN;
+	 }
  }
