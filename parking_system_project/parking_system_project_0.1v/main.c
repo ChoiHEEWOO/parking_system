@@ -24,16 +24,18 @@
 #include "timer_lib.h"
 #include "clcd_i2c.h"
 
-#define USING_MY_HOTSPOT
-///#define NON_USING_MY_HOTSPOT
+
 
 //버퍼를 생성해 여석 여부를 배열을 통해 확인하는 방식
 #define USER_STATE_DEBUG 1
 //RFID 시리얼 데이터 UART0를 통해 출력할 때 사용
-#define DUMMY_TEST_SERIAL 0  //if 1: dummy test, 0: no test at terminal
+#define DUMMY_TEST_SERIAL 1  //if 1: dummy test, 0: no test at terminal
 //다른 장치들 연결 안된 상태에서 테스트해야 할 경우 0으로 설정
 #define MOTOR_DEBUG_WITHOUT_ANOTHER_SENSOR 1 //if 1: default, 0: Motor Test.
 
+
+#define USING_MY_HOTSPOT
+///#define NON_USING_MY_HOTSPOT
 //본인 핸드폰 핫스팟 환경일 때
 #ifdef USING_MY_HOTSPOT
 	#define SSID "ChoiHW"
@@ -81,7 +83,7 @@
 //===========================RFID 입/출구==========================//
 #define ENTRANCE_GATE 0
 #define EXIT_GATE 1
-#define MAX_USER_COUNT 20 //주차장 칸수
+#define MAX_USER_COUNT 42 //주차장 칸수
 //===========================RFID 입/출구==========================//
 typedef uint32_t u32;
 typedef uint8_t u8;
@@ -265,8 +267,13 @@ ISR(TIMER0_COMP_vect) // 1khz 속도로 ISR 진입 1ms <-> 20ms
 	if(lcd_tick_enable_flag)TICK.lcd_tick_1ms++;
 	
 	
-	if(exit_gate_tick_enable_flag)TICK.exit_gate_tick_1ms++;
-	if(entrance_gate_tick_enable_flag)TICK.entrance_gate_tick_1ms++;
+	if(exit_gate_tick_enable_flag){
+		TICK.exit_gate_tick_1ms++;
+	}
+	if(entrance_gate_tick_enable_flag){
+		TICK.entrance_gate_tick_1ms++;
+		
+	}
 	
 	//맨 처음 초기화 할 때 사용하는 tick
 	if(timeout_tick_enable_flag)TICK.timeout_tick_1ms++;
@@ -379,7 +386,7 @@ ISR(USART1_RX_vect)
 	
 	
 	//바로 터미널창에서 확인시도.
-	uart0_tx_char(buff); //1ms 소요되기 떄문에 동작에 장애가 생길수도 있음 분명
+	uart0_tx_char(buff); //1ms 소요되기 떄문에 동작에 장애가 생길수도 있음 
 	
 }
 int main(void)
@@ -390,12 +397,7 @@ int main(void)
 	systems_init();
 	
 
-	set_servo(SERVO_EXIT_GATE,SERVO_GATE_CLOSE);
-	set_servo(SERVO_ENTRANCE_GATE,SERVO_GATE_CLOSE);
-	//set_servo_angle(SERVO_CH_1,SERVO_ANGLE_0);
-	_delay_ms(500);
- 	servo_release(SERVO_CH_0);
- 	servo_release(SERVO_CH_1);
+	
 	
 	
 	
@@ -403,18 +405,6 @@ int main(void)
 	//dummy
 	DDRA|=0x80;
 	
-	//_delay_ms(500)
-	//dummy
-	//DDRF|=0x01;
-	
-	//dummycode
-// 	_delay_ms(1000);
-// 	set_step_dir_and_angle(STEP_MOTOR_CW,360);
-// 	_delay_ms(2000);
-// 	set_step_dir_and_angle(STEP_MOTOR_CCW,180);
-// 	_delay_ms(2000);
-//	set_step_dir_and_angle(STEP_MOTOR_CW,90);
-	//setSoundClip(BUZZ_ON);
 	
 	while (1) 
     {//가급적 루프 안에 delay가 길게 걸리면 않도록 주의해야 함.
@@ -458,6 +448,7 @@ int main(void)
 			
 			//가끔 여기 문을 안들어감 뭐가 문젠지는 확인이 안됨. 
 			if(TICK.entrance_gate_tick_1ms==1000) servo_release(SERVO_ENTRANCE_GATE);
+			
 			else if(TICK.entrance_gate_tick_1ms==10000)//10초
 			{
 				//수정희망(멜로디 변경)
@@ -465,10 +456,12 @@ int main(void)
 				//입구 서보모터 닫는 명령
 				set_servo(SERVO_ENTRANCE_GATE,SERVO_GATE_CLOSE);
 			}
+			//set_servo명령을 넣어봄으로써 변수값이 정상적으로 변하는지 체크해보기. 집에가서
 			else if(TICK.entrance_gate_tick_1ms==12000)
 			{//12초
 				
-				servo_release(SERVO_ENTRANCE_GATE);
+				servo_release(SERVO_ENTRANCE_GATE); 
+				_delay_ms(300);//dummy code 결과 확인후 삭제여부 결정
 				tick_disable(TICK_ENTRANCE_GATE);
 				entrance_gate_tick_enable_flag=STOP_TIMER;
 				
@@ -561,8 +554,13 @@ void systems_init(void){
 		i2c_lcd_string(2,0, version_buf);
 		i2c_lcd_string(3,0,"====================");
 		setSoundClip(BUZZ_ESP8266_CONNECTED);
+		
 		//main loop start.
+		set_servo(SERVO_EXIT_GATE,SERVO_GATE_CLOSE);
+		set_servo(SERVO_ENTRANCE_GATE,SERVO_GATE_CLOSE);
 		_delay_ms(2000);
+		servo_release(SERVO_CH_0);
+		servo_release(SERVO_CH_1);
 		i2c_lcd_clear();
 		i2c_lcd_noBacklight();
 	#endif
